@@ -90,7 +90,7 @@ def extract_packing(pages):
                 "Material": get_value(r'Material:\s*(\S+)', b),
                 "Reference PO#": get_value(r'Reference PO#:\s*(\S+)', b),
                 # FIX: flexible regex for Item Seq
-                "Item Seq.": get_value(r'Item Seq\\.?\\s*:?\\s*(\\S+)', b),
+                "Item Seq.": get_value(r'Item Seq\.?\s*:?\s*(\S+)', b),
                 "Total Cartons": get_value(r'Total Cartons:\s*(\d+)', b),
                 "Total Units": get_value(r'Total Units:\s*(\d+)', b),
                 "Total Gross Kgs": get_value(r'Total Gross Kgs:\s*([\d.]+)', b),
