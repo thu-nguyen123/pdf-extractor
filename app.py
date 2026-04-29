@@ -79,7 +79,7 @@ def extract_packing(pages):
             data = {
                 "Page": page_num,
                 "Type": "Factory Packing List",
-                "Invoice Number": get_value(r'Invoice Number\.:\s*(.+)', b),
+                "Invoice Number": get_value(r'Invoice Number\.:\s*([^\n]+)', b).split('AFS Category')[0].strip(),
                 "Material": get_value(r'Material:\s*(\S+)', b),
                 "Reference PO#": get_value(r'Reference PO#:\s*(\S+)', b),
                 "Item Seq.": get_value(r'Item Seq\.:\s*(\S+)', b),
