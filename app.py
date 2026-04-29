@@ -135,6 +135,26 @@ if uploaded_file:
     # APPLY MERGE HERE
     df_all = merge_selected_columns(df_all)
 
+    # ---------- REORDER COLUMNS ----------
+    def reorder_columns(df):
+        cols = list(df.columns)
+
+        def move_after(col_to_move, after_col):
+            if col_to_move in cols and after_col in cols:
+                cols.remove(col_to_move)
+                idx = cols.index(after_col) + 1
+                cols.insert(idx, col_to_move)
+
+        # Move Material after Reference Invoice #
+        move_after("Material", "Reference Invoice #")
+
+        # Move PO Line Item Seq after PO#
+        move_after("PO Line Item Seq", "PO#")
+
+        return df[cols]
+
+    df_all = reorder_columns(df_all)
+
     # ---------- SORT ----------
     type_order = [
         "Trading Company Commercial Invoice",
