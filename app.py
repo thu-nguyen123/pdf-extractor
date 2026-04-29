@@ -29,12 +29,17 @@ def extract_trading(pages):
 
     for page_num, text in pages:
         blocks = text.split("Material#:")
+
+        # FIX: lấy từ toàn page (tránh mất dữ liệu)
+        invoice_no = get_value(r'Invoice Number:\s*(\S+)', text)
+        ref_invoice = get_value(r'Reference Invoice #:\s*(\S+)', text)
+
         for b in blocks[1:]:
             data = {
                 "Page": page_num,
                 "Type": "Trading Company Commercial Invoice",
-                "Invoice Number": get_value(r'Invoice Number:\s*(\S+)', b),
-                "Reference Invoice #": get_value(r'Reference Invoice #:\s*(\S+)', b),
+                "Invoice Number": invoice_no,
+                "Reference Invoice #": ref_invoice,
                 "Material#": get_value(r'^(\S+)', b),
                 "PO#": get_value(r'PO#:\s*(\S+)', b),
                 "PO Line Item Seq.#": get_value(r'PO Line Item Seq.#:\s*(\S+)', b),
@@ -76,10 +81,15 @@ def extract_packing(pages):
     for page_num, text in pages:
         blocks = text.split("Factory Packing List")
         for b in blocks[1:]:
+            invoice_raw = get_value(r'Invoice Number\.:\s*([^\n]+)', b)
+
+            # FIX: loại bỏ phần dư
+            invoice_clean = invoice_raw.split("AFS Category")[0].strip()
+
             data = {
                 "Page": page_num,
                 "Type": "Factory Packing List",
-                "Invoice Number": get_value(r'Invoice Number\.:\s*([^\n]+)', b).split('AFS Category')[0].strip(),
+                "Invoice Number": invoice_clean,
                 "Material": get_value(r'Material:\s*(\S+)', b),
                 "Reference PO#": get_value(r'Reference PO#:\s*(\S+)', b),
                 "Item Seq.": get_value(r'Item Seq\.:\s*(\S+)', b),
@@ -93,78 +103,80 @@ def extract_packing(pages):
 
 # ---------- MAIN ----------
 if uploaded_file:
+    pages = extract_text_with_page(uploaded_file)
 
-    with st.spinner("Đang xử lý PDF..."):
-        pages = extract_text_with_page(uploaded_file)
+    st.success("PDF loaded successfully!")
 
-        trading = extract_trading(pages)
-        factory = extract_factory(pages)
-        packing = extract_packing(pages)
+    trading = extract_trading(pages)
+    factory = extract_factory(pages)
+    packing = extract_packing(pages)
 
-        all_data = trading + factory + packing
-        df_all = pd.DataFrame(all_data)
+    # Combine
+    all_data = trading + factory + packing
+    df_all = pd.DataFrame(all_data)
 
-        # ---------- SORT ----------
-        type_order = [
-            "Trading Company Commercial Invoice",
-            "Factory Commercial Invoice",
-            "Factory Packing List",
-        ]
+    # ---------- SORT ----------
+    type_order = [
+        "Trading Company Commercial Invoice",
+        "Factory Commercial Invoice",
+        "Factory Packing List",
+    ]
 
-        df_all["Type"] = pd.Categorical(df_all["Type"], categories=type_order, ordered=True)
-        df_all = df_all.sort_values(by=["Page", "Type"])
+    df_all["Type"] = pd.Categorical(df_all["Type"], categories=type_order, ordered=True)
+    df_all = df_all.sort_values(by=["Page", "Type"])
 
-        # ---------- REMOVE EMPTY ROWS ----------
-        cols_to_check = [c for c in df_all.columns if c not in ["Page", "Type", "Invoice Number", "Reference Invoice #"]]
+    # ---------- REMOVE BAD ROWS ----------
+    cols_to_check = [
+        c for c in df_all.columns
+        if c not in ["Page", "Type", "Invoice Number", "Reference Invoice #"]
+    ]
 
-        mask_remove = (
-            (df_all[cols_to_check].fillna("").eq("").all(axis=1))
-            & (
-                (df_all["Invoice Number"].fillna("") != "")
-                | (df_all["Reference Invoice #"].fillna("") != "")
-            )
+    mask_remove = (
+        (df_all[cols_to_check].fillna("").eq("").all(axis=1))
+        & (
+            (df_all["Invoice Number"].fillna("") != "")
+            | (df_all["Reference Invoice #"].fillna("") != "")
         )
+    )
 
-        df_all = df_all[~mask_remove]
+    df_all = df_all[~mask_remove]
 
-        st.success("✅ Extract thành công!")
+    # ---------- DISPLAY ----------
+    st.subheader("📊 All Data (Sorted by Page → Type)")
+    st.dataframe(df_all)
 
-        st.subheader("📊 All Data (Sorted)")
-        st.dataframe(df_all)
+    trading_df = df_all[df_all["Type"] == "Trading Company Commercial Invoice"]
+    factory_df = df_all[df_all["Type"] == "Factory Commercial Invoice"]
+    packing_df = df_all[df_all["Type"] == "Factory Packing List"]
 
-        # ---------- SPLIT ----------
-        trading_df = df_all[df_all["Type"] == "Trading Company Commercial Invoice"]
-        factory_df = df_all[df_all["Type"] == "Factory Commercial Invoice"]
-        packing_df = df_all[df_all["Type"] == "Factory Packing List"]
+    st.subheader("Trading Company Commercial Invoice")
+    st.dataframe(trading_df)
 
-        st.subheader("Trading Company Commercial Invoice")
-        st.dataframe(trading_df)
+    st.subheader("Factory Commercial Invoice")
+    st.dataframe(factory_df)
 
-        st.subheader("Factory Commercial Invoice")
-        st.dataframe(factory_df)
+    st.subheader("Factory Packing List")
+    st.dataframe(packing_df)
 
-        st.subheader("Factory Packing List")
-        st.dataframe(packing_df)
+    # ---------- EXPORT ----------
+    def to_excel():
+        from io import BytesIO
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_all.to_excel(writer, sheet_name='All_Data', index=False)
+            trading_df.to_excel(writer, sheet_name='Trading', index=False)
+            factory_df.to_excel(writer, sheet_name='Factory', index=False)
+            packing_df.to_excel(writer, sheet_name='Packing', index=False)
+        return output.getvalue()
 
-        # ---------- EXPORT ----------
-        def to_excel():
-            from io import BytesIO
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_all.to_excel(writer, sheet_name='All_Data', index=False)
-                trading_df.to_excel(writer, sheet_name='Trading', index=False)
-                factory_df.to_excel(writer, sheet_name='Factory', index=False)
-                packing_df.to_excel(writer, sheet_name='Packing', index=False)
-            return output.getvalue()
+    excel_data = to_excel()
 
-        excel_data = to_excel()
-
-        st.download_button(
-            label="📥 Download Excel",
-            data=excel_data,
-            file_name="extracted_invoices.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    st.download_button(
+        label="📥 Download Excel",
+        data=excel_data,
+        file_name="extracted_invoices.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 else:
-    st.info("📌 Upload file PDF để bắt đầu")
+    st.info("Please upload a PDF file")
