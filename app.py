@@ -28,14 +28,14 @@ def extract_trading(pages):
     results = []
 
     for page_num, text in pages:
-        blocks = text.split("Trading Company Commercial Invoice")
+        blocks = text.split("Material#:")
         for b in blocks[1:]:
             data = {
                 "Page": page_num,
                 "Type": "Trading Company Commercial Invoice",
                 "Invoice Number": get_value(r'Invoice Number:\s*(\S+)', b),
                 "Reference Invoice #": get_value(r'Reference Invoice #:\s*(\S+)', b),
-                "Material#": get_value(r'Material#:\s*(\S+)', b),
+                "Material#": get_value(r'^(\S+)', b),
                 "PO#": get_value(r'PO#:\s*(\S+)', b),
                 "PO Line Item Seq.#": get_value(r'PO Line Item Seq.#:\s*(\S+)', b),
                 "Total Cartons": get_value(r'Total Number of Cartons:\s*(\d+)', b),
@@ -104,7 +104,7 @@ if uploaded_file:
         all_data = trading + factory + packing
         df_all = pd.DataFrame(all_data)
 
-        # ---------- SORT LOGIC ----------
+        # ---------- SORT ----------
         type_order = [
             "Trading Company Commercial Invoice",
             "Factory Commercial Invoice",
@@ -114,15 +114,37 @@ if uploaded_file:
         df_all["Type"] = pd.Categorical(df_all["Type"], categories=type_order, ordered=True)
         df_all = df_all.sort_values(by=["Page", "Type"])
 
+        # ---------- REMOVE EMPTY ROWS ----------
+        cols_to_check = [c for c in df_all.columns if c not in ["Page", "Type", "Invoice Number", "Reference Invoice #"]]
+
+        mask_remove = (
+            (df_all[cols_to_check].fillna("").eq("").all(axis=1))
+            & (
+                (df_all["Invoice Number"].fillna("") != "")
+                | (df_all["Reference Invoice #"].fillna("") != "")
+            )
+        )
+
+        df_all = df_all[~mask_remove]
+
         st.success("✅ Extract thành công!")
 
         st.subheader("📊 All Data (Sorted)")
         st.dataframe(df_all)
 
-        # Split sheet
-        trading_df = df_all[df_all["Type"] == type_order[0]]
-        factory_df = df_all[df_all["Type"] == type_order[1]]
-        packing_df = df_all[df_all["Type"] == type_order[2]]
+        # ---------- SPLIT ----------
+        trading_df = df_all[df_all["Type"] == "Trading Company Commercial Invoice"]
+        factory_df = df_all[df_all["Type"] == "Factory Commercial Invoice"]
+        packing_df = df_all[df_all["Type"] == "Factory Packing List"]
+
+        st.subheader("Trading Company Commercial Invoice")
+        st.dataframe(trading_df)
+
+        st.subheader("Factory Commercial Invoice")
+        st.dataframe(factory_df)
+
+        st.subheader("Factory Packing List")
+        st.dataframe(packing_df)
 
         # ---------- EXPORT ----------
         def to_excel():
