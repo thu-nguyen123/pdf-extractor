@@ -30,7 +30,6 @@ def extract_trading(pages):
     for page_num, text in pages:
         blocks = text.split("Material#:")
 
-        # FIX: lấy từ toàn page (tránh mất dữ liệu)
         invoice_no = get_value(r'Invoice Number:\s*(\S+)', text)
         ref_invoice = get_value(r'Reference Invoice #:\s*(\S+)', text)
 
@@ -81,9 +80,7 @@ def extract_packing(pages):
     for page_num, text in pages:
         blocks = text.split("Factory Packing List")
         for b in blocks[1:]:
-            invoice_raw = get_value(r'Invoice Number\.:\s*([^\n]+)', b)
-
-            # FIX: loại bỏ phần dư
+            invoice_raw = get_value(r'Invoice Number\\.:\\s*([^\\n]+)', b)
             invoice_clean = invoice_raw.split("AFS Category")[0].strip()
 
             data = {
@@ -92,7 +89,7 @@ def extract_packing(pages):
                 "Invoice Number": invoice_clean,
                 "Material": get_value(r'Material:\s*(\S+)', b),
                 "Reference PO#": get_value(r'Reference PO#:\s*(\S+)', b),
-                "Item Seq.": get_value(r'Item Seq\.:\s*(\S+)', b),
+                "Item Seq.": get_value(r'Item Seq\\.:\\s*(\S+)', b),
                 "Total Cartons": get_value(r'Total Cartons:\s*(\d+)', b),
                 "Total Units": get_value(r'Total Units:\s*(\d+)', b),
                 "Total Gross Kgs": get_value(r'Total Gross Kgs:\s*([\d.]+)', b),
@@ -100,6 +97,27 @@ def extract_packing(pages):
             }
             results.append(data)
     return results
+
+# ---------- MERGE SELECTED COLUMNS ----------
+def merge_selected_columns(df):
+
+    def coalesce(cols):
+        cols = [c for c in cols if c in df.columns]
+        if not cols:
+            return ""
+        return df[cols].bfill(axis=1).iloc[:, 0]
+
+    # Merge Material
+    if "Material#" in df.columns or "Material #" in df.columns:
+        df["Material"] = coalesce(["Material#", "Material #"])
+        df = df.drop(columns=[c for c in ["Material#", "Material #"] if c in df.columns])
+
+    # Merge PO Line Item Seq
+    if "PO Line Item Seq.#" in df.columns or "PO Line Item Seq. #" in df.columns:
+        df["PO Line Item Seq"] = coalesce(["PO Line Item Seq.#", "PO Line Item Seq. #"])
+        df = df.drop(columns=[c for c in ["PO Line Item Seq.#", "PO Line Item Seq. #"] if c in df.columns])
+
+    return df
 
 # ---------- MAIN ----------
 if uploaded_file:
@@ -111,9 +129,11 @@ if uploaded_file:
     factory = extract_factory(pages)
     packing = extract_packing(pages)
 
-    # Combine
     all_data = trading + factory + packing
     df_all = pd.DataFrame(all_data)
+
+    # APPLY MERGE HERE
+    df_all = merge_selected_columns(df_all)
 
     # ---------- SORT ----------
     type_order = [
