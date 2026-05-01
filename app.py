@@ -39,22 +39,19 @@ def extract_trading(pages):
         gross_weight = get_value(r'Total\s*Gross\s*Weight[\s:]*([\d.\s]+)', text)
 
         for b in blocks[1:]:
-            data = {
+            results.append({
                 "Page": page_num,
                 "Type": "Trading Company Commercial Invoice",
                 "Invoice Number": invoice_no,
                 "Reference Invoice #": ref_invoice,
-
                 "Material#": get_value(r'^\s*([A-Za-z0-9\-]+)', b),
                 "PO#": get_value(r'PO#\s*:\s*(\S+)', b),
                 "PO Line Item Seq.#": get_value(r'PO Line Item Seq\.?#\s*:\s*(\S+)', b),
-
                 "Total Cartons": total_cartons,
                 "Total Quantity": total_qty,
                 "Total Amount": total_amount,
                 "Gross Weight": gross_weight,
-            }
-            results.append(data)
+            })
 
     return results
 
@@ -66,7 +63,7 @@ def extract_factory(pages):
         blocks = text.split("Factory Commercial Invoice")
 
         for b in blocks[1:]:
-            data = {
+            results.append({
                 "Page": page_num,
                 "Type": "Factory Commercial Invoice",
                 "Invoice Number": get_value(r'Invoice Number\s*:\s*(\S+)', b),
@@ -78,8 +75,7 @@ def extract_factory(pages):
                 "Total Quantity": get_value(r'Total Invoice Quantity[\s:]*([\d,]+)', b),
                 "Total Amount": get_value(r'Total Amount[\s:]*([\d,.]+)', b),
                 "Gross Weight": get_value(r'Total Gross Weight[\s:]*([\d.]+)', b),
-            }
-            results.append(data)
+            })
 
     return results
 
@@ -94,21 +90,18 @@ def extract_packing(pages):
             invoice_raw = get_value(r'Invoice Number\.?\s*:\s*([^\n]+)', b)
             invoice_clean = re.split(r'AFS Category|Plant:|\s{2,}', invoice_raw)[0].strip()
 
-            data = {
+            results.append({
                 "Page": page_num,
                 "Type": "Factory Packing List",
                 "Invoice Number": invoice_clean,
-
                 "Material": get_value(r'Material\s*:\s*(\S+)', b),
                 "Reference PO#": get_value(r'Reference\s*PO#\s*:?\s*([A-Za-z0-9\-]+)', b),
                 "Item Seq.": get_value(r'Item Seq[\s\.]*:?\s*([A-Za-z0-9]+)', b),
-
                 "Total Cartons": get_value(r'Total Cartons[\s:]*([\d,]+)', b),
                 "Total Units": get_value(r'Total Units[\s:]*([\d,]+)', b),
                 "Total Gross Kgs": get_value(r'Total Gross Kgs[\s:]*([\d.]+)', b),
                 "Total CBM": get_value(r'Total CBM[\s:]*([\d.]+)', b),
-            }
-            results.append(data)
+            })
 
     return results
 
@@ -131,27 +124,27 @@ def merge_selected_columns(df):
 
     return df
 
-# ---------- REMOVE ROW (FINAL FIX) ----------
+# ---------- REMOVE ROW (ULTRA CLEAN PDF FIX) ----------
 def remove_empty_rows(df):
 
     key_cols = ["Invoice Number", "Reference Invoice #"]
 
-    def is_empty(val):
+    def clean(val):
         if pd.isna(val):
-            return True
+            return ""
         val = str(val)
+        val = val.replace("\xa0", " ")
         val = re.sub(r'\s+', '', val)
-        return val == "" or val.lower() in ["none", "nan"]
+        val = val.replace(".", "").replace("-", "")
+        return val.lower()
 
     def should_drop(row):
-        has_key = any(not is_empty(row[c]) for c in key_cols if c in row)
-
+        has_key = any(clean(row.get(c)) != "" for c in key_cols)
         other_cols = [c for c in df.columns if c not in key_cols]
-        others_empty = all(is_empty(row[c]) for c in other_cols)
-
+        others_empty = all(clean(row.get(c)) == "" for c in other_cols)
         return has_key and others_empty
 
-    return df[~df.apply(should_drop, axis=1)].copy()
+    return df.loc[~df.apply(should_drop, axis=1)].copy()
 
 # ---------- REORDER ----------
 def reorder_columns(df):
@@ -172,15 +165,18 @@ def reorder_columns(df):
 if uploaded_file:
     pages = extract_text_with_page(uploaded_file)
 
-    trading = extract_trading(pages)
-    factory = extract_factory(pages)
-    packing = extract_packing(pages)
-
-    df_all = pd.DataFrame(trading + factory + packing)
+    df_all = pd.DataFrame(
+        extract_trading(pages)
+        + extract_factory(pages)
+        + extract_packing(pages)
+    )
 
     df_all = merge_selected_columns(df_all)
 
-    # 🔥 XÓA ROW RÁC (KHÔNG ĐỤNG DATA)
+    # 🔥 cực quan trọng: convert hết sang string để tránh lỗi NaN
+    df_all = df_all.astype(str)
+
+    # 🔥 XÓA ROW RÁC
     df_all = remove_empty_rows(df_all)
 
     df_all = reorder_columns(df_all)
