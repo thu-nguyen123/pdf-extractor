@@ -19,7 +19,7 @@ def extract_text_with_page(pdf_file):
 
 # ---------- HELPERS ----------
 def get_value(pattern, text):
-    match = re.search(pattern, text, re.S)  # FIX: hỗ trợ xuống dòng
+    match = re.search(pattern, text, re.S)
     return match.group(1).strip() if match else ""
 
 # ---------- TRADING ----------
@@ -33,7 +33,7 @@ def extract_trading(pages):
         ref_invoice = get_value(r'Reference Invoice #:\s*(\S+)', text)
 
         for b in blocks[1:]:
-            data = {
+            results.append({
                 "Page": page_num,
                 "Type": "Trading Company Commercial Invoice",
                 "Invoice Number": invoice_no,
@@ -45,8 +45,7 @@ def extract_trading(pages):
                 "Total Quantity": get_value(r'Total Invoice Quantity:\s*([\d,]+)', b),
                 "Total Amount": get_value(r'Total Amount:\s*([\d,.]+)', b),
                 "Gross Weight": get_value(r'Total Gross Weight\s*:\s*([\d.]+)', b),
-            }
-            results.append(data)
+            })
     return results
 
 # ---------- FACTORY ----------
@@ -55,8 +54,9 @@ def extract_factory(pages):
 
     for page_num, text in pages:
         blocks = text.split("Factory Commercial Invoice")
+
         for b in blocks[1:]:
-            data = {
+            results.append({
                 "Page": page_num,
                 "Type": "Factory Commercial Invoice",
                 "Invoice Number": get_value(r'Invoice Number:\s*(\S+)', b),
@@ -68,11 +68,10 @@ def extract_factory(pages):
                 "Total Quantity": get_value(r'Total Invoice Quantity:\s*([\d,]+)', b),
                 "Total Amount": get_value(r'Total Amount:\s*([\d,.]+)', b),
                 "Gross Weight": get_value(r'Total Gross Weight:\s*([\d.]+)', b),
-            }
-            results.append(data)
+            })
     return results
 
-# ---------- PACKING (FIXED) ----------
+# ---------- PACKING ----------
 def extract_packing(pages):
     results = []
 
@@ -81,30 +80,22 @@ def extract_packing(pages):
 
         for b in blocks[1:]:
 
-            # ✅ FIX Invoice Number (cắt sạch rác)
+            # FIX Invoice Number
             invoice_raw = get_value(r'Invoice Number\.?\s*:\s*([^\n]+)', b)
             invoice_clean = re.split(r'AFS Category|Plant:|\s{2,}', invoice_raw)[0].strip()
 
-            data = {
+            results.append({
                 "Page": page_num,
                 "Type": "Factory Packing List",
                 "Invoice Number": invoice_clean,
-
                 "Material": get_value(r'Material:\s*(\S+)', b),
-
-                # ✅ FIX Reference PO# (không lấy nhầm Plant)
                 "Reference PO#": get_value(r'Reference\s*PO#\s*:?\s*([A-Za-z0-9\-]+)', b),
-
-                # ✅ FIX Item Seq (xuống dòng vẫn bắt được)
                 "Item Seq.": get_value(r'Item Seq[\s\.]*:?\s*([A-Za-z0-9]+)', b),
-
                 "Total Cartons": get_value(r'Total Cartons:\s*(\d+)', b),
                 "Total Units": get_value(r'Total Units:\s*(\d+)', b),
                 "Total Gross Kgs": get_value(r'Total Gross Kgs:\s*([\d.]+)', b),
                 "Total CBM": get_value(r'Total CBM:\s*([\d.]+)', b),
-            }
-
-            results.append(data)
+            })
 
     return results
 
@@ -127,19 +118,34 @@ def merge_selected_columns(df):
 
     return df
 
+# ---------- REORDER ----------
+def reorder_columns(df):
+    cols = list(df.columns)
+
+    def move_after(col_to_move, after_col):
+        if col_to_move in cols and after_col in cols:
+            cols.remove(col_to_move)
+            idx = cols.index(after_col) + 1
+            cols.insert(idx, col_to_move)
+
+    # ✅ FIX vị trí
+    move_after("PO Line Item Seq", "PO#")
+
+    return df[cols]
+
 # ---------- MAIN ----------
 if uploaded_file:
     pages = extract_text_with_page(uploaded_file)
 
-    trading = extract_trading(pages)
-    factory = extract_factory(pages)
-    packing = extract_packing(pages)
-
-    df_all = pd.DataFrame(trading + factory + packing)
+    df_all = pd.DataFrame(
+        extract_trading(pages) +
+        extract_factory(pages) +
+        extract_packing(pages)
+    )
 
     df_all = merge_selected_columns(df_all)
+    df_all = reorder_columns(df_all)
 
-    # SORT
     type_order = [
         "Trading Company Commercial Invoice",
         "Factory Commercial Invoice",
