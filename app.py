@@ -108,7 +108,6 @@ def extract_packing(pages):
                 "Total Gross Kgs": get_value(r'Total Gross Kgs[\s:]*([\d.]+)', b),
                 "Total CBM": get_value(r'Total CBM[\s:]*([\d.]+)', b),
             }
-
             results.append(data)
 
     return results
@@ -132,14 +131,25 @@ def merge_selected_columns(df):
 
     return df
 
-# ---------- REMOVE EMPTY ROWS ----------
+# ---------- REMOVE EMPTY ROWS (FINAL FIX) ----------
 def remove_empty_rows(df):
     key_cols = ["Invoice Number", "Reference Invoice #"]
-    other_cols = [c for c in df.columns if c not in key_cols]
+
+    def is_empty(val):
+        if pd.isna(val):
+            return True
+        val = str(val).strip().lower()
+        return val in ["", "none", "nan"]
 
     def is_empty_row(row):
-        has_key = any(str(row.get(c, "")).strip() != "" for c in key_cols)
-        others_empty = all(str(row.get(c, "")).strip() == "" for c in other_cols)
+        has_key = any(not is_empty(row.get(c)) for c in key_cols)
+
+        others_empty = all(
+            is_empty(v)
+            for k, v in row.items()
+            if k not in key_cols
+        )
+
         return has_key and others_empty
 
     return df[~df.apply(is_empty_row, axis=1)]
@@ -170,6 +180,9 @@ if uploaded_file:
     df_all = pd.DataFrame(trading + factory + packing)
 
     df_all = merge_selected_columns(df_all)
+
+    # 🔥 QUAN TRỌNG: chuẩn hóa dữ liệu
+    df_all = df_all.fillna("")
 
     # 🔥 XÓA DÒNG RÁC
     df_all = remove_empty_rows(df_all)
