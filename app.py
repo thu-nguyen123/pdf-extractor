@@ -17,15 +17,13 @@ def extract_text_with_page(pdf_file):
             data.append((i, text))
     return data
 
-# ---------- HELPER (FINAL FIX) ----------
+# ---------- HELPER ----------
 def get_value(pattern, text):
-    # 🔥 normalize toàn bộ text (fix xuống dòng + spacing lỗi)
     text = re.sub(r'\s+', ' ', text)
-
     match = re.search(pattern, text, re.I)
     return match.group(1).strip() if match else ""
 
-# ---------- TRADING (FIX TRIỆT ĐỂ) ----------
+# ---------- TRADING ----------
 def extract_trading(pages):
     results = []
 
@@ -35,41 +33,27 @@ def extract_trading(pages):
         invoice_no = get_value(r'Invoice Number\s*:\s*(\S+)', text)
         ref_invoice = get_value(r'Reference Invoice #\s*:\s*(\S+)', text)
 
-        # 🔥 FIX CHUẨN: handle xuống dòng + không có ":"
-        total_cartons = get_value(
-            r'Total\s*Number\s*of\s*Cartons[\s:]*([\d,]+)', text)
-
-        total_qty = get_value(
-            r'Total\s*Invoice\s*Quantity[\s:]*([\d,]+)', text)
-
-        total_amount = get_value(
-            r'Total\s*Amount[\s:]*([\d,.\s]+)', text)
-
-        gross_weight = get_value(
-            r'Total\s*Gross\s*Weight[\s:]*([\d.\s]+)', text)
+        total_cartons = get_value(r'Total\s*Number\s*of\s*Cartons[\s:]*([\d,]+)', text)
+        total_qty = get_value(r'Total\s*Invoice\s*Quantity[\s:]*([\d,]+)', text)
+        total_amount = get_value(r'Total\s*Amount[\s:]*([\d,.\s]+)', text)
+        gross_weight = get_value(r'Total\s*Gross\s*Weight[\s:]*([\d.\s]+)', text)
 
         for b in blocks[1:]:
-
             data = {
                 "Page": page_num,
                 "Type": "Trading Company Commercial Invoice",
                 "Invoice Number": invoice_no,
                 "Reference Invoice #": ref_invoice,
 
-                # FIX Material
                 "Material#": get_value(r'^\s*([A-Za-z0-9\-]+)', b),
-
                 "PO#": get_value(r'PO#\s*:\s*(\S+)', b),
-
-                "PO Line Item Seq.#": get_value(
-                    r'PO Line Item Seq\.?#\s*:\s*(\S+)', b),
+                "PO Line Item Seq.#": get_value(r'PO Line Item Seq\.?#\s*:\s*(\S+)', b),
 
                 "Total Cartons": total_cartons,
                 "Total Quantity": total_qty,
                 "Total Amount": total_amount,
                 "Gross Weight": gross_weight,
             }
-
             results.append(data)
 
     return results
@@ -107,7 +91,6 @@ def extract_packing(pages):
         blocks = text.split("Factory Packing List")
 
         for b in blocks[1:]:
-
             invoice_raw = get_value(r'Invoice Number\.?\s*:\s*([^\n]+)', b)
             invoice_clean = re.split(r'AFS Category|Plant:|\s{2,}', invoice_raw)[0].strip()
 
@@ -117,12 +100,8 @@ def extract_packing(pages):
                 "Invoice Number": invoice_clean,
 
                 "Material": get_value(r'Material\s*:\s*(\S+)', b),
-
-                "Reference PO#": get_value(
-                    r'Reference\s*PO#\s*:?\s*([A-Za-z0-9\-]+)', b),
-
-                "Item Seq.": get_value(
-                    r'Item Seq[\s\.]*:?\s*([A-Za-z0-9]+)', b),
+                "Reference PO#": get_value(r'Reference\s*PO#\s*:?\s*([A-Za-z0-9\-]+)', b),
+                "Item Seq.": get_value(r'Item Seq[\s\.]*:?\s*([A-Za-z0-9]+)', b),
 
                 "Total Cartons": get_value(r'Total Cartons[\s:]*([\d,]+)', b),
                 "Total Units": get_value(r'Total Units[\s:]*([\d,]+)', b),
@@ -148,11 +127,22 @@ def merge_selected_columns(df):
         df = df.drop(columns=[c for c in ["Material#", "Material #"] if c in df.columns])
 
     if "PO Line Item Seq.#" in df.columns or "PO Line Item Seq. #" in df.columns:
-        df["PO Line Item Seq"] = coalesce(
-            ["PO Line Item Seq.#", "PO Line Item Seq. #"])
+        df["PO Line Item Seq"] = coalesce(["PO Line Item Seq.#", "PO Line Item Seq. #"])
         df = df.drop(columns=[c for c in ["PO Line Item Seq.#", "PO Line Item Seq. #"] if c in df.columns])
 
     return df
+
+# ---------- REMOVE EMPTY ROWS ----------
+def remove_empty_rows(df):
+    key_cols = ["Invoice Number", "Reference Invoice #"]
+    other_cols = [c for c in df.columns if c not in key_cols]
+
+    def is_empty_row(row):
+        has_key = any(str(row.get(c, "")).strip() != "" for c in key_cols)
+        others_empty = all(str(row.get(c, "")).strip() == "" for c in other_cols)
+        return has_key and others_empty
+
+    return df[~df.apply(is_empty_row, axis=1)]
 
 # ---------- REORDER ----------
 def reorder_columns(df):
@@ -180,6 +170,10 @@ if uploaded_file:
     df_all = pd.DataFrame(trading + factory + packing)
 
     df_all = merge_selected_columns(df_all)
+
+    # 🔥 XÓA DÒNG RÁC
+    df_all = remove_empty_rows(df_all)
+
     df_all = reorder_columns(df_all)
 
     type_order = [
