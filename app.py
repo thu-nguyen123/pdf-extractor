@@ -4,12 +4,11 @@ import re
 import pandas as pd
 
 st.set_page_config(page_title="PDF Invoice Extractor", layout="wide")
-
 st.title("📄 PDF Invoice Extractor Tool")
 
 uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
 
-# ---------- TEXT EXTRACTION WITH PAGE ----------
+# ---------- TEXT EXTRACTION ----------
 def extract_text_with_page(pdf_file):
     data = []
     with pdfplumber.open(pdf_file) as pdf:
@@ -20,7 +19,7 @@ def extract_text_with_page(pdf_file):
 
 # ---------- HELPERS ----------
 def get_value(pattern, text):
-    match = re.search(pattern, text)
+    match = re.search(pattern, text, re.S)  # FIX: hỗ trợ xuống dòng
     return match.group(1).strip() if match else ""
 
 # ---------- TRADING ----------
@@ -73,33 +72,43 @@ def extract_factory(pages):
             results.append(data)
     return results
 
-# ---------- PACKING ----------
+# ---------- PACKING (FIXED) ----------
 def extract_packing(pages):
     results = []
 
     for page_num, text in pages:
         blocks = text.split("Factory Packing List")
+
         for b in blocks[1:]:
-            invoice_raw = get_value(r'Invoice Number\\.:\\s*([^\\n]+)', b)
-            invoice_clean = invoice_raw.split("AFS Category")[0].strip()
+
+            # ✅ FIX Invoice Number (cắt sạch rác)
+            invoice_raw = get_value(r'Invoice Number\.?\s*:\s*([^\n]+)', b)
+            invoice_clean = re.split(r'AFS Category|Plant:|\s{2,}', invoice_raw)[0].strip()
 
             data = {
                 "Page": page_num,
                 "Type": "Factory Packing List",
                 "Invoice Number": invoice_clean,
+
                 "Material": get_value(r'Material:\s*(\S+)', b),
-                "Reference PO#": get_value(r'Reference PO#:\s*(\S+)', b),
-                # FIX: flexible regex for Item Seq
-                "Item Seq.": get_value(r'Item Seq\.?\s*:?\s*(\S+)', b),
+
+                # ✅ FIX Reference PO# (không lấy nhầm Plant)
+                "Reference PO#": get_value(r'Reference\s*PO#\s*:?\s*([A-Za-z0-9\-]+)', b),
+
+                # ✅ FIX Item Seq (xuống dòng vẫn bắt được)
+                "Item Seq.": get_value(r'Item Seq[\s\.]*:?\s*([A-Za-z0-9]+)', b),
+
                 "Total Cartons": get_value(r'Total Cartons:\s*(\d+)', b),
                 "Total Units": get_value(r'Total Units:\s*(\d+)', b),
                 "Total Gross Kgs": get_value(r'Total Gross Kgs:\s*([\d.]+)', b),
                 "Total CBM": get_value(r'Total CBM:\s*([\d.]+)', b),
             }
+
             results.append(data)
+
     return results
 
-# ---------- MERGE SELECTED COLUMNS ----------
+# ---------- MERGE ----------
 def merge_selected_columns(df):
 
     def coalesce(cols):
@@ -108,12 +117,10 @@ def merge_selected_columns(df):
             return ""
         return df[cols].bfill(axis=1).iloc[:, 0]
 
-    # Merge Material
     if "Material#" in df.columns or "Material #" in df.columns:
         df["Material"] = coalesce(["Material#", "Material #"])
         df = df.drop(columns=[c for c in ["Material#", "Material #"] if c in df.columns])
 
-    # Merge PO Line Item Seq
     if "PO Line Item Seq.#" in df.columns or "PO Line Item Seq. #" in df.columns:
         df["PO Line Item Seq"] = coalesce(["PO Line Item Seq.#", "PO Line Item Seq. #"])
         df = df.drop(columns=[c for c in ["PO Line Item Seq.#", "PO Line Item Seq. #"] if c in df.columns])
@@ -124,39 +131,15 @@ def merge_selected_columns(df):
 if uploaded_file:
     pages = extract_text_with_page(uploaded_file)
 
-    st.success("PDF loaded successfully!")
-
     trading = extract_trading(pages)
     factory = extract_factory(pages)
     packing = extract_packing(pages)
 
-    all_data = trading + factory + packing
-    df_all = pd.DataFrame(all_data)
+    df_all = pd.DataFrame(trading + factory + packing)
 
-    # APPLY MERGE HERE
     df_all = merge_selected_columns(df_all)
 
-    # ---------- REORDER COLUMNS ----------
-    def reorder_columns(df):
-        cols = list(df.columns)
-
-        def move_after(col_to_move, after_col):
-            if col_to_move in cols and after_col in cols:
-                cols.remove(col_to_move)
-                idx = cols.index(after_col) + 1
-                cols.insert(idx, col_to_move)
-
-        # Move Material after Reference Invoice #
-        move_after("Material", "Reference Invoice #")
-
-        # Move PO Line Item Seq after PO#
-        move_after("PO Line Item Seq", "PO#")
-
-        return df[cols]
-
-    df_all = reorder_columns(df_all)
-
-    # ---------- SORT ----------
+    # SORT
     type_order = [
         "Trading Company Commercial Invoice",
         "Factory Commercial Invoice",
@@ -166,58 +149,7 @@ if uploaded_file:
     df_all["Type"] = pd.Categorical(df_all["Type"], categories=type_order, ordered=True)
     df_all = df_all.sort_values(by=["Page", "Type"])
 
-    # ---------- REMOVE BAD ROWS ----------
-    cols_to_check = [
-        c for c in df_all.columns
-        if c not in ["Page", "Type", "Invoice Number", "Reference Invoice #"]
-    ]
-
-    mask_remove = (
-        (df_all[cols_to_check].fillna("").eq("").all(axis=1))
-        & (
-            (df_all["Invoice Number"].fillna("") != "")
-            | (df_all["Reference Invoice #"].fillna("") != "")
-        )
-    )
-
-    df_all = df_all[~mask_remove]
-
-    # ---------- DISPLAY ----------
-    st.subheader("📊 All Data (Sorted by Page → Type)")
     st.dataframe(df_all)
-
-    trading_df = df_all[df_all["Type"] == "Trading Company Commercial Invoice"]
-    factory_df = df_all[df_all["Type"] == "Factory Commercial Invoice"]
-    packing_df = df_all[df_all["Type"] == "Factory Packing List"]
-
-    st.subheader("Trading Company Commercial Invoice")
-    st.dataframe(trading_df)
-
-    st.subheader("Factory Commercial Invoice")
-    st.dataframe(factory_df)
-
-    st.subheader("Factory Packing List")
-    st.dataframe(packing_df)
-
-    # ---------- EXPORT ----------
-    def to_excel():
-        from io import BytesIO
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_all.to_excel(writer, sheet_name='All_Data', index=False)
-            trading_df.to_excel(writer, sheet_name='Trading', index=False)
-            factory_df.to_excel(writer, sheet_name='Factory', index=False)
-            packing_df.to_excel(writer, sheet_name='Packing', index=False)
-        return output.getvalue()
-
-    excel_data = to_excel()
-
-    st.download_button(
-        label="📥 Download Excel",
-        data=excel_data,
-        file_name="extracted_invoices.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
 
 else:
     st.info("Please upload a PDF file")
