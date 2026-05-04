@@ -171,27 +171,44 @@ def reorder_columns(df):
 
 # ---------- MAIN ----------
 if uploaded_file:
-    pages = extract_text_with_page(uploaded_file)
+    try:
+        pages = extract_text_with_page(uploaded_file)
 
-    trading = extract_trading(pages)
-    factory = extract_factory(pages)
-    packing = extract_packing(pages)
+        trading = extract_trading(pages)
+        factory = extract_factory(pages)
+        packing = extract_packing(pages)
 
-    df_all = pd.DataFrame(trading + factory + packing)
+        df_all = pd.DataFrame(trading + factory + packing)
 
-    df_all = merge_selected_columns(df_all)
-    df_all = reorder_columns(df_all)
+        # 🔥 nếu không có data thì dừng
+        if df_all.empty:
+            st.warning("Không extract được dữ liệu từ PDF")
+            st.stop()
 
-    type_order = [
-        "Trading Company Commercial Invoice",
-        "Factory Commercial Invoice",
-        "Factory Packing List",
-    ]
+        df_all = merge_selected_columns(df_all)
 
-    df_all["Type"] = pd.Categorical(df_all["Type"], categories=type_order, ordered=True)
-    df_all = df_all.sort_values(by=["Page", "Type"])
+        # 🔥 tránh lỗi thiếu column khi reorder
+        df_all = reorder_columns(df_all)
 
-    st.dataframe(df_all)
+        type_order = [
+            "Trading Company Commercial Invoice",
+            "Factory Commercial Invoice",
+            "Factory Packing List",
+        ]
+
+        if "Type" in df_all.columns:
+            df_all["Type"] = pd.Categorical(
+                df_all["Type"],
+                categories=type_order,
+                ordered=True
+            )
+            df_all = df_all.sort_values(by=["Page", "Type"])
+
+        st.dataframe(df_all)
+
+    except Exception as e:
+        st.error("❌ App bị lỗi:")
+        st.write(e)
 
 else:
     st.info("Please upload a PDF file")
