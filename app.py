@@ -17,15 +17,13 @@ def extract_text_with_page(pdf_file):
             data.append((i, text))
     return data
 
-# ---------- HELPER (FINAL FIX) ----------
+# ---------- HELPER ----------
 def get_value(pattern, text):
-    # 🔥 normalize toàn bộ text (fix xuống dòng + spacing lỗi)
     text = re.sub(r'\s+', ' ', text)
-
     match = re.search(pattern, text, re.I)
-    return match.group(1).strip() if match else ""
+    return match.group(1).strip() if match else None  # 🔥 trả None để filter chuẩn
 
-# ---------- TRADING (FIX TRIỆT ĐỂ) ----------
+# ---------- TRADING ----------
 def extract_trading(pages):
     results = []
 
@@ -35,42 +33,25 @@ def extract_trading(pages):
         invoice_no = get_value(r'Invoice Number\s*:\s*(\S+)', text)
         ref_invoice = get_value(r'Reference Invoice #\s*:\s*(\S+)', text)
 
-        # 🔥 FIX CHUẨN: handle xuống dòng + không có ":"
-        total_cartons = get_value(
-            r'Total\s*Number\s*of\s*Cartons[\s:]*([\d,]+)', text)
-
-        total_qty = get_value(
-            r'Total\s*Invoice\s*Quantity[\s:]*([\d,]+)', text)
-
-        total_amount = get_value(
-            r'Total\s*Amount[\s:]*([\d,.\s]+)', text)
-
-        gross_weight = get_value(
-            r'Total\s*Gross\s*Weight[\s:]*([\d.\s]+)', text)
+        total_cartons = get_value(r'Total\s*Number\s*of\s*Cartons[\s:]*([\d,]+)', text)
+        total_qty = get_value(r'Total\s*Invoice\s*Quantity[\s:]*([\d,]+)', text)
+        total_amount = get_value(r'Total\s*Amount[\s:]*([\d,.\s]+)', text)
+        gross_weight = get_value(r'Total\s*Gross\s*Weight[\s:]*([\d.\s]+)', text)
 
         for b in blocks[1:]:
-
-            data = {
+            results.append({
                 "Page": page_num,
                 "Type": "Trading Company Commercial Invoice",
                 "Invoice Number": invoice_no,
                 "Reference Invoice #": ref_invoice,
-
-                # FIX Material
                 "Material#": get_value(r'^\s*([A-Za-z0-9\-]+)', b),
-
                 "PO#": get_value(r'PO#\s*:\s*(\S+)', b),
-
-                "PO Line Item Seq.#": get_value(
-                    r'PO Line Item Seq\.?#\s*:\s*(\S+)', b),
-
+                "PO Line Item Seq.#": get_value(r'PO Line Item Seq\.?#\s*:\s*(\S+)', b),
                 "Total Cartons": total_cartons,
                 "Total Quantity": total_qty,
                 "Total Amount": total_amount,
                 "Gross Weight": gross_weight,
-            }
-
-            results.append(data)
+            })
 
     return results
 
@@ -82,7 +63,7 @@ def extract_factory(pages):
         blocks = text.split("Factory Commercial Invoice")
 
         for b in blocks[1:]:
-            data = {
+            results.append({
                 "Page": page_num,
                 "Type": "Factory Commercial Invoice",
                 "Invoice Number": get_value(r'Invoice Number\s*:\s*(\S+)', b),
@@ -94,8 +75,7 @@ def extract_factory(pages):
                 "Total Quantity": get_value(r'Total Invoice Quantity[\s:]*([\d,]+)', b),
                 "Total Amount": get_value(r'Total Amount[\s:]*([\d,.]+)', b),
                 "Gross Weight": get_value(r'Total Gross Weight[\s:]*([\d.]+)', b),
-            }
-            results.append(data)
+            })
 
     return results
 
@@ -107,30 +87,21 @@ def extract_packing(pages):
         blocks = text.split("Factory Packing List")
 
         for b in blocks[1:]:
-
             invoice_raw = get_value(r'Invoice Number\.?\s*:\s*([^\n]+)', b)
-            invoice_clean = re.split(r'AFS Category|Plant:|\s{2,}', invoice_raw)[0].strip()
+            invoice_clean = re.split(r'AFS Category|Plant:|\s{2,}', invoice_raw or "")[0].strip()
 
-            data = {
+            results.append({
                 "Page": page_num,
                 "Type": "Factory Packing List",
                 "Invoice Number": invoice_clean,
-
                 "Material": get_value(r'Material\s*:\s*(\S+)', b),
-
-                "Reference PO#": get_value(
-                    r'Reference\s*PO#\s*:?\s*([A-Za-z0-9\-]+)', b),
-
-                "Item Seq.": get_value(
-                    r'Item Seq[\s\.]*:?\s*([A-Za-z0-9]+)', b),
-
+                "Reference PO#": get_value(r'Reference\s*PO#\s*:?\s*([A-Za-z0-9\-]+)', b),
+                "Item Seq.": get_value(r'Item Seq[\s\.]*:?\s*([A-Za-z0-9]+)', b),
                 "Total Cartons": get_value(r'Total Cartons[\s:]*([\d,]+)', b),
                 "Total Units": get_value(r'Total Units[\s:]*([\d,]+)', b),
                 "Total Gross Kgs": get_value(r'Total Gross Kgs[\s:]*([\d.]+)', b),
                 "Total CBM": get_value(r'Total CBM[\s:]*([\d.]+)', b),
-            }
-
-            results.append(data)
+            })
 
     return results
 
@@ -140,7 +111,7 @@ def merge_selected_columns(df):
     def coalesce(cols):
         cols = [c for c in cols if c in df.columns]
         if not cols:
-            return ""
+            return None
         return df[cols].bfill(axis=1).iloc[:, 0]
 
     if "Material#" in df.columns or "Material #" in df.columns:
@@ -148,8 +119,7 @@ def merge_selected_columns(df):
         df = df.drop(columns=[c for c in ["Material#", "Material #"] if c in df.columns])
 
     if "PO Line Item Seq.#" in df.columns or "PO Line Item Seq. #" in df.columns:
-        df["PO Line Item Seq"] = coalesce(
-            ["PO Line Item Seq.#", "PO Line Item Seq. #"])
+        df["PO Line Item Seq"] = coalesce(["PO Line Item Seq.#", "PO Line Item Seq. #"])
         df = df.drop(columns=[c for c in ["PO Line Item Seq.#", "PO Line Item Seq. #"] if c in df.columns])
 
     return df
@@ -169,9 +139,30 @@ def reorder_columns(df):
 
     return df[cols]
 
+# ---------- REMOVE INVALID ROWS ----------
+def remove_invalid_rows(df):
+
+    keep_rows = []
+
+    for _, row in df.iterrows():
+        invoice = row.get("Invoice Number")
+        ref = row.get("Reference Invoice #")
+
+        other_cols = row.drop(labels=["Invoice Number", "Reference Invoice #"], errors='ignore')
+
+        # 🔥 nếu tất cả cột khác đều None hoặc rỗng → loại
+        if pd.notna(invoice) or pd.notna(ref):
+            if other_cols.notna().sum() == 0:
+                continue
+
+        keep_rows.append(row)
+
+    return pd.DataFrame(keep_rows)
+
 # ---------- MAIN ----------
-if uploaded_file:
-    try:
+try:
+    if uploaded_file:
+
         pages = extract_text_with_page(uploaded_file)
 
         trading = extract_trading(pages)
@@ -180,15 +171,11 @@ if uploaded_file:
 
         df_all = pd.DataFrame(trading + factory + packing)
 
-        # 🔥 nếu không có data thì dừng
-        if df_all.empty:
-            st.warning("Không extract được dữ liệu từ PDF")
-            st.stop()
-
         df_all = merge_selected_columns(df_all)
-
-        # 🔥 tránh lỗi thiếu column khi reorder
         df_all = reorder_columns(df_all)
+
+        # 🔥 FIX CHÍNH Ở ĐÂY
+        df_all = remove_invalid_rows(df_all)
 
         type_order = [
             "Trading Company Commercial Invoice",
@@ -196,19 +183,14 @@ if uploaded_file:
             "Factory Packing List",
         ]
 
-        if "Type" in df_all.columns:
-            df_all["Type"] = pd.Categorical(
-                df_all["Type"],
-                categories=type_order,
-                ordered=True
-            )
-            df_all = df_all.sort_values(by=["Page", "Type"])
+        df_all["Type"] = pd.Categorical(df_all["Type"], categories=type_order, ordered=True)
+        df_all = df_all.sort_values(by=["Page", "Type"])
 
-        st.dataframe(df_all)
+        st.dataframe(df_all, use_container_width=True)
 
-    except Exception as e:
-        st.error("❌ App bị lỗi:")
-        st.write(e)
+    else:
+        st.info("Please upload a PDF file")
 
-else:
-    st.info("Please upload a PDF file")
+except Exception as e:
+    st.error("❌ ERROR:")
+    st.code(str(e))
