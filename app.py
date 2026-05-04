@@ -2,6 +2,7 @@ import streamlit as st
 import pdfplumber
 import re
 import pandas as pd
+from io import BytesIO
 
 st.set_page_config(page_title="PDF Invoice Extractor", layout="wide")
 st.title("📄 PDF Invoice Extractor Tool")
@@ -17,59 +18,47 @@ def extract_text_with_page(pdf_file):
             data.append((i, text))
     return data
 
-# ---------- HELPER (FINAL FIX) ----------
+# ---------- HELPER ----------
 def get_value(pattern, text):
-    # 🔥 normalize toàn bộ text (fix xuống dòng + spacing lỗi)
-    text = re.sub(r'\s+', ' ', text)
+    try:
+        text = re.sub(r'\s+', ' ', text)
+        match = re.search(pattern, text, re.I)
+        return match.group(1).strip() if match else ""
+    except:
+        return ""
 
-    match = re.search(pattern, text, re.I)
-    return match.group(1).strip() if match else ""
-
-# ---------- TRADING (FIX TRIỆT ĐỂ) ----------
+# ---------- TRADING ----------
 def extract_trading(pages):
     results = []
 
     for page_num, text in pages:
+        if "Material#:" not in text:
+            continue
+
         blocks = text.split("Material#:")
 
         invoice_no = get_value(r'Invoice Number\s*:\s*(\S+)', text)
         ref_invoice = get_value(r'Reference Invoice #\s*:\s*(\S+)', text)
 
-        # 🔥 FIX CHUẨN: handle xuống dòng + không có ":"
-        total_cartons = get_value(
-            r'Total\s*Number\s*of\s*Cartons[\s:]*([\d,]+)', text)
-
-        total_qty = get_value(
-            r'Total\s*Invoice\s*Quantity[\s:]*([\d,]+)', text)
-
-        total_amount = get_value(
-            r'Total\s*Amount[\s:]*([\d,.\s]+)', text)
-
-        gross_weight = get_value(
-            r'Total\s*Gross\s*Weight[\s:]*([\d.\s]+)', text)
+        total_cartons = get_value(r'Total\s*Number\s*of\s*Cartons[\s:]*([\d,]+)', text)
+        total_qty = get_value(r'Total\s*Invoice\s*Quantity[\s:]*([\d,]+)', text)
+        total_amount = get_value(r'Total\s*Amount[\s:]*([\d,.\s]+)', text)
+        gross_weight = get_value(r'Total\s*Gross\s*Weight[\s:]*([\d.\s]+)', text)
 
         for b in blocks[1:]:
-
             data = {
                 "Page": page_num,
                 "Type": "Trading Company Commercial Invoice",
                 "Invoice Number": invoice_no,
                 "Reference Invoice #": ref_invoice,
-
-                # FIX Material
                 "Material#": get_value(r'^\s*([A-Za-z0-9\-]+)', b),
-
                 "PO#": get_value(r'PO#\s*:\s*(\S+)', b),
-
-                "PO Line Item Seq.#": get_value(
-                    r'PO Line Item Seq\.?#\s*:\s*(\S+)', b),
-
+                "PO Line Item Seq.#": get_value(r'PO Line Item Seq\.?#\s*:\s*(\S+)', b),
                 "Total Cartons": total_cartons,
                 "Total Quantity": total_qty,
                 "Total Amount": total_amount,
                 "Gross Weight": gross_weight,
             }
-
             results.append(data)
 
     return results
@@ -79,6 +68,9 @@ def extract_factory(pages):
     results = []
 
     for page_num, text in pages:
+        if "Factory Commercial Invoice" not in text:
+            continue
+
         blocks = text.split("Factory Commercial Invoice")
 
         for b in blocks[1:]:
@@ -104,32 +96,27 @@ def extract_packing(pages):
     results = []
 
     for page_num, text in pages:
+        if "Factory Packing List" not in text:
+            continue
+
         blocks = text.split("Factory Packing List")
 
         for b in blocks[1:]:
-
-            invoice_raw = get_value(r'Invoice Number\.?\s*:\s*([^\n]+)', b)
+            invoice_raw = get_value(r'Invoice Number.*?:\s*([^\n]+)', b)
             invoice_clean = re.split(r'AFS Category|Plant:|\s{2,}', invoice_raw)[0].strip()
 
             data = {
                 "Page": page_num,
                 "Type": "Factory Packing List",
                 "Invoice Number": invoice_clean,
-
                 "Material": get_value(r'Material\s*:\s*(\S+)', b),
-
-                "Reference PO#": get_value(
-                    r'Reference\s*PO#\s*:?\s*([A-Za-z0-9\-]+)', b),
-
-                "Item Seq.": get_value(
-                    r'Item Seq[\s\.]*:?\s*([A-Za-z0-9]+)', b),
-
+                "Reference PO#": get_value(r'Reference\s*PO#\s*:?\s*(\S+)', b),
+                "Item Seq.": get_value(r'Item Seq.*?:\s*(\S+)', b),
                 "Total Cartons": get_value(r'Total Cartons[\s:]*([\d,]+)', b),
                 "Total Units": get_value(r'Total Units[\s:]*([\d,]+)', b),
                 "Total Gross Kgs": get_value(r'Total Gross Kgs[\s:]*([\d.]+)', b),
                 "Total CBM": get_value(r'Total CBM[\s:]*([\d.]+)', b),
             }
-
             results.append(data)
 
     return results
@@ -169,29 +156,74 @@ def reorder_columns(df):
 
     return df[cols]
 
+# ---------- CLEAN SAFE ----------
+def clean_dataframe(df):
+    if df.empty:
+        return df
+
+    df = df.replace("", pd.NA)
+
+    # xóa dòng rỗng
+    df = df.dropna(how="all")
+
+    # xóa dòng không có data chính
+    important_cols = ["Material", "PO#", "Total Quantity", "Total Cartons"]
+    existing_cols = [c for c in important_cols if c in df.columns]
+
+    if existing_cols:
+        df = df.dropna(subset=existing_cols, how="all")
+
+    # convert toàn bộ sang string để tránh crash
+    df = df.fillna("")
+    df = df.astype(str)
+
+    return df.reset_index(drop=True)
+
+# ---------- EXPORT EXCEL ----------
+def to_excel_bytes(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Data')
+    return output.getvalue()
+
 # ---------- MAIN ----------
 if uploaded_file:
-    pages = extract_text_with_page(uploaded_file)
+    try:
+        pages = extract_text_with_page(uploaded_file)
 
-    trading = extract_trading(pages)
-    factory = extract_factory(pages)
-    packing = extract_packing(pages)
+        trading = extract_trading(pages)
+        factory = extract_factory(pages)
+        packing = extract_packing(pages)
 
-    df_all = pd.DataFrame(trading + factory + packing)
+        df_all = pd.DataFrame(trading + factory + packing)
 
-    df_all = merge_selected_columns(df_all)
-    df_all = reorder_columns(df_all)
+        df_all = merge_selected_columns(df_all)
+        df_all = reorder_columns(df_all)
 
-    type_order = [
-        "Trading Company Commercial Invoice",
-        "Factory Commercial Invoice",
-        "Factory Packing List",
-    ]
+        if "Page" in df_all.columns:
+            df_all = df_all.sort_values(by=["Page"])
 
-    df_all["Type"] = pd.Categorical(df_all["Type"], categories=type_order, ordered=True)
-    df_all = df_all.sort_values(by=["Page", "Type"])
+        df_all = clean_dataframe(df_all)
 
-    st.dataframe(df_all)
+        if df_all.empty:
+            st.warning("⚠️ Không có dữ liệu hợp lệ")
+        else:
+            st.dataframe(df_all, use_container_width=True)
+
+            # ✅ DOWNLOAD EXCEL
+            excel_data = to_excel_bytes(df_all)
+
+            st.download_button(
+                label="⬇️ Download Excel",
+                data=excel_data,
+                file_name="invoice_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+    except Exception as e:
+        import traceback
+        st.error("❌ Lỗi:")
+        st.code(traceback.format_exc())
 
 else:
     st.info("Please upload a PDF file")
